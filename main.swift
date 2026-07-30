@@ -270,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     @objc private func showLogStream() {
         if let window = logWindow {
+            startLogRefreshTimer()
             window.makeKeyAndOrderFront(nil)
             refreshLogStream()
             return
@@ -277,6 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 540), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Pukkelhack — live diagnostische log"
         window.delegate = self
+        window.animationBehavior = .none
         window.center()
         let root = NSView()
         window.contentView = root
@@ -304,9 +306,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         ])
         logWindow = window
         logTextView = textView
-        logRefreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refreshLogStream() }
+        startLogRefreshTimer()
         refreshLogStream()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    private func startLogRefreshTimer() {
+        guard logRefreshTimer == nil else { return }
+        logRefreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refreshLogStream() }
     }
 
     private func refreshLogStream() {
@@ -321,10 +328,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         textView.scrollToEndOfDocument(nil)
     }
 
-    func windowWillClose(_ notification: Notification) {
-        guard notification.object as? NSWindow === logWindow else { return }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender === logWindow else { return true }
         logRefreshTimer?.invalidate(); logRefreshTimer = nil
-        logTextView = nil; logWindow = nil
+        sender.orderOut(nil)
+        return false
     }
 
     @objc private func openFoundTicket() {
