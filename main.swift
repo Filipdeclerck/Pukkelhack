@@ -29,6 +29,16 @@ struct Row {
     let url: URL
 }
 
+struct RequestResult {
+    let search: Search
+    let html: String
+    let statusCode: Int
+    let durationMs: Int
+    let cacheStatus: String
+    let age: String
+    let errorDescription: String?
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, UNUserNotificationCenterDelegate {
     private let interval: TimeInterval = 20
     private var timer: DispatchSourceTimer?
@@ -63,7 +73,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private let combi = NSButton(checkboxWithTitle: "Combi", target: nil, action: nil)
     private let vip = NSButton(checkboxWithTitle: "VIP", target: nil, action: nil)
     private let about = NSButton(title: "About", target: nil, action: nil)
+    private let openLogs = NSButton(title: "Open diagnostische logs", target: nil, action: nil)
     private let table = NSTableView()
+
+    private var logDirectory: URL {
+        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Logs/Pukkelhack", isDirectory: true)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let center = UNUserNotificationCenter.current()
@@ -96,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         openPage.target = self; openPage.action = #selector(openOfficialPage)
         clearLog.target = self; clearLog.action = #selector(clearOverview)
         about.target = self; about.action = #selector(showAbout)
+        openLogs.target = self; openLogs.action = #selector(revealLogs)
         foundBanner.target = self; foundBanner.action = #selector(openFoundTicket)
         foundBanner.isBordered = true
         foundBanner.bezelStyle = .rounded
@@ -131,7 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         addColumn("Kooplink", width: 110)
         scroll.documentView = table
 
-        let buttons = NSStackView(views: [startStop, openPage, clearLog, about])
+        let buttons = NSStackView(views: [startStop, openPage, clearLog, openLogs, about])
         buttons.orientation = .horizontal; buttons.spacing = 10
         let stack = NSStackView(views: [title, subtitle, selection, rules, foundBanner, status, buttons, scroll])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12
@@ -211,6 +228,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         alert.runModal()
     }
 
+    @objc private func revealLogs() {
+        try? FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([logDirectory])
+    }
+
     @objc private func openFoundTicket() {
         guard let url = currentOfferURL else { return }
         NSWorkspace.shared.open(freshURL(url))
@@ -228,7 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         status.stringValue = "Controle bezig…"
         let group = DispatchGroup()
         let lock = NSLock()
-        var responses: [(Search, String)] = []
+        var responses: [RequestResult] = []
 
         for search in searches {
             group.enter()
@@ -237,11 +259,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             request.timeoutInterval = 15
             request.setValue("no-cache, no-store, max-age=0", forHTTPHeaderField: "Cache-Control")
             request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+            let started = Date()
             session.dataTask(with: request) { data, response, error in
-                let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+                let http = response as? HTTPURLResponse
+                let httpStatus = http?.statusCode ?? 0
                 let html = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                let value = (error == nil && (200...299).contains(httpStatus)) ? html : "__ERROR_\(httpStatus)__"
-                lock.lock(); responses.append((search, value)); lock.unlock()
+                let headers = http?.allHeaderFields ?? [:]
+                let cacheStatus = (headers["CF-Cache-Status"] ?? headers["X-Cache"] ?? "") as? String ?? ""
+                let age = (headers["Age"] as? String) ?? ""
+                let result = RequestResult(search: search, html: html, statusCode: httpStatus, durationMs: Int(Date().timeIntervalSince(started) * 1000), cacheStatus: cacheStatus, age: age, errorDescription: error?.localizedDescription)
+                lock.lock(); responses.append(result); lock.unlock()
                 group.leave()
             }.resume()
         }
@@ -272,17 +299,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         }
     }
 
-    private func process(_ responses: [(Search, String)]) {
+    private func process(_ responses: [RequestResult]) {
         let date = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
         runNumber += 1
+        writeDiagnostics(responses, at: date)
         var available = 0
         var currentlyAvailable: [String: Row] = [:]
-        for (search, html) in responses {
-            if html.hasPrefix("__ERROR_") {
-                let detail = html == "__ERROR_429__" ? "Server vraagt om trager te controleren" : "Ophalen mislukt"
+        for response in responses {
+            let search = response.search
+            if !(200...299).contains(response.statusCode) {
+                let detail = response.statusCode == 429 ? "Server vraagt om trager te controleren" : "Ophalen mislukt"
                 add(Row(time: date, ticket: search.ticket, camping: search.campingLabel, result: detail, url: search.url))
                 continue
             }
+            let html = response.html
             let text = html.replacingOccurrences(of: "&euro;", with: "€").replacingOccurrences(of: "&#8364;", with: "€")
             guard let section = text.components(separatedBy: "id=\"tickets\"").dropFirst().first,
                   !section.contains("Geen tickets beschikbaar.") else {
@@ -346,6 +376,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     }
 
     private func add(_ row: Row) { rows.insert(row, at: 0); table.reloadData() }
+
+    private func writeDiagnostics(_ responses: [RequestResult], at displayTime: String) {
+        do {
+            try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+            let formatter = ISO8601DateFormatter()
+            let stamp = formatter.string(from: Date())
+            let dayFormatter = DateFormatter()
+            dayFormatter.dateFormat = "yyyy-MM-dd"
+            let file = logDirectory.appendingPathComponent("pukkelhack-\(dayFormatter.string(from: Date())).jsonl")
+            let attributes = try? FileManager.default.attributesOfItem(atPath: file.path)
+            let logFile = (attributes?[.size] as? NSNumber)?.intValue ?? 0 > 2_000_000
+                ? logDirectory.appendingPathComponent("pukkelhack-\(formatter.string(from: Date()).replacingOccurrences(of: ":", with: "-")).jsonl")
+                : file
+            for result in responses {
+                let item: [String: Any] = [
+                    "timestamp": stamp,
+                    "run": runNumber,
+                    "ticket": result.search.ticket,
+                    "camping": result.search.campingLabel,
+                    "http_status": result.statusCode,
+                    "duration_ms": result.durationMs,
+                    "cache_status": result.cacheStatus,
+                    "age": result.age,
+                    "error": result.errorDescription ?? ""
+                ]
+                let data = try JSONSerialization.data(withJSONObject: item, options: [])
+                if !FileManager.default.fileExists(atPath: logFile.path) { FileManager.default.createFile(atPath: logFile.path, contents: nil) }
+                let handle = try FileHandle(forWritingTo: logFile)
+                try handle.seekToEnd()
+                handle.write(data)
+                handle.write(Data("\n".utf8))
+                try handle.close()
+            }
+        } catch {
+            status.stringValue = "Diagnostische log kon niet worden geschreven"
+        }
+    }
 
     private func freshURL(_ url: URL) -> URL {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }

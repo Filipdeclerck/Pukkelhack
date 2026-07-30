@@ -10,6 +10,7 @@ Pukkelhack is a small macOS app that checks the official Pukkelpop Meet-up resal
 - Uses a private URL session, cache-busting query parameters and no-cache headers.
 - Shows active and expired offers, with a direct **Koop nu** button for active offers.
 - Sends a clickable macOS notification when a new matching ticket appears.
+- Includes local diagnostic logs with HTTP status, response time and cache headers; use the **Open diagnostische logs** button in the app to inspect them.
 
 ## Download
 
