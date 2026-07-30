@@ -40,7 +40,7 @@ struct RequestResult {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, UNUserNotificationCenterDelegate {
-    private let interval: TimeInterval = 20
+    private var interval: TimeInterval = 20
     private var timer: DispatchSourceTimer?
     private var isChecking = false
     private var runNumber = 0
@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
     private let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
     private let status = NSTextField(labelWithString: "Klaar om te controleren")
+    private let serverStatus = NSTextField(labelWithString: "● Serverstatus: nog niet gecontroleerd")
     private let startStop = NSButton(title: "Start controle", target: nil, action: nil)
     private let openPage = NSButton(title: "Open officiële Meet-up-pagina", target: nil, action: nil)
     private let clearLog = NSButton(title: "Wis overzicht", target: nil, action: nil)
@@ -74,6 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private let vip = NSButton(checkboxWithTitle: "VIP", target: nil, action: nil)
     private let about = NSButton(title: "About", target: nil, action: nil)
     private let openLogs = NSButton(title: "Open diagnostische logs", target: nil, action: nil)
+    private let retrySeconds = NSTextField(string: "20")
+    private let applyRetry = NSButton(title: "Pas retry-tijd toe", target: nil, action: nil)
     private let table = NSTableView()
 
     private var logDirectory: URL {
@@ -113,12 +116,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         clearLog.target = self; clearLog.action = #selector(clearOverview)
         about.target = self; about.action = #selector(showAbout)
         openLogs.target = self; openLogs.action = #selector(revealLogs)
+        applyRetry.target = self; applyRetry.action = #selector(applyRetryInterval)
         foundBanner.target = self; foundBanner.action = #selector(openFoundTicket)
         foundBanner.isBordered = true
         foundBanner.bezelStyle = .rounded
         foundBanner.isEnabled = false
         foundBanner.font = .systemFont(ofSize: 16, weight: .semibold)
         foundBanner.contentTintColor = .secondaryLabelColor
+        serverStatus.wantsLayer = true
+        serverStatus.layer?.cornerRadius = 6
+        serverStatus.drawsBackground = true
+        setServerStatus("● Serverstatus: nog niet gecontroleerd", color: .secondaryLabelColor, background: .clear)
 
         vipLimit.alignment = .right; vipLimit.maximumNumberOfLines = 1
         combiLimit.alignment = .right; combiLimit.maximumNumberOfLines = 1
@@ -136,6 +144,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             NSTextField(labelWithString: "• camping is optioneel")
         ])
         rules.orientation = .horizontal; rules.spacing = 8
+        retrySeconds.alignment = .right; retrySeconds.maximumNumberOfLines = 1
+        let retryControl = NSStackView(views: [
+            NSTextField(labelWithString: "Retry elke"), retrySeconds,
+            NSTextField(labelWithString: "sec. (min. 20)"), applyRetry
+        ])
+        retryControl.orientation = .horizontal; retryControl.spacing = 8
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
@@ -150,7 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
 
         let buttons = NSStackView(views: [startStop, openPage, clearLog, openLogs, about])
         buttons.orientation = .horizontal; buttons.spacing = 10
-        let stack = NSStackView(views: [title, subtitle, selection, rules, foundBanner, status, buttons, scroll])
+        let stack = NSStackView(views: [title, subtitle, serverStatus, selection, rules, retryControl, foundBanner, status, buttons, scroll])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(stack)
@@ -164,7 +178,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 380),
             vipLimit.widthAnchor.constraint(equalToConstant: 55),
-            combiLimit.widthAnchor.constraint(equalToConstant: 55)
+            combiLimit.widthAnchor.constraint(equalToConstant: 55),
+            retrySeconds.widthAnchor.constraint(equalToConstant: 55)
         ])
     }
 
@@ -188,6 +203,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             startStop.title = "Start controle"
             status.stringValue = "Gepauzeerd"
         }
+    }
+
+    @objc private func applyRetryInterval() {
+        guard let seconds = Double(retrySeconds.stringValue), seconds >= 20 else {
+            retrySeconds.stringValue = String(Int(interval))
+            status.stringValue = "Kies minstens 20 seconden"
+            return
+        }
+        interval = seconds
+        retrySeconds.stringValue = String(Int(seconds))
+        if timer != nil {
+            timer?.cancel(); timer = nil
+            beginMonitoring()
+        }
+        status.stringValue = "Retry-tijd ingesteld op \(Int(seconds)) seconden"
     }
 
     private func beginMonitoring() {
@@ -353,8 +383,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
             foundBanner.title = "Nog geen ticket gevonden"
             foundBanner.contentTintColor = .secondaryLabelColor
             foundBanner.isEnabled = false
-            status.stringValue = "Run #\(runNumber) — \(date) — geen passende aanbieding (volgende controle binnen 20 sec.)"
+            status.stringValue = "Run #\(runNumber) — \(date) — geen passende aanbieding (volgende controle binnen \(Int(interval)) sec.)"
         }
+        updateServerStatus(from: responses)
+    }
+
+    private func updateServerStatus(from responses: [RequestResult]) {
+        let codes = responses.map(\.statusCode)
+        if codes.contains(429) {
+            setServerStatus("⚠️ Server vraagt om te vertragen — verhoog de retry-tijd, bijvoorbeeld naar 60 sec.", color: .systemOrange, background: .systemOrange.withAlphaComponent(0.14))
+        } else if codes.contains(where: { $0 == 401 || $0 == 403 || $0 == 451 }) {
+            setServerStatus("⛔ Requests worden mogelijk geweigerd — pauzeer of verhoog de retry-tijd.", color: .systemRed, background: .systemRed.withAlphaComponent(0.14))
+        } else if codes.contains(where: { $0 == 0 || $0 >= 500 }) {
+            setServerStatus("⚠️ Tijdelijk server- of netwerkprobleem — opnieuw proberen volgens de ingestelde retry-tijd.", color: .systemOrange, background: .systemOrange.withAlphaComponent(0.14))
+        } else {
+            setServerStatus("● Serverstatus: bereikbaar — normale snelheid", color: .systemGreen, background: .systemGreen.withAlphaComponent(0.12))
+        }
+    }
+
+    private func setServerStatus(_ text: String, color: NSColor, background: NSColor) {
+        serverStatus.stringValue = text
+        serverStatus.textColor = color
+        serverStatus.backgroundColor = background
     }
 
     private func prices(in text: String) -> [String] {
