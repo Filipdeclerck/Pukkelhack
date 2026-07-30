@@ -12,6 +12,7 @@ Pukkelhack is a small macOS app that checks the official Pukkelpop Meet-up resal
 - Sends a clickable macOS notification when a new matching ticket appears.
 - Includes local diagnostic logs with HTTP status, response time and cache headers; use the **Open diagnostische logs** button in the app to inspect them.
 - Shows a clear server-status banner. If the server returns a rate-limit response, you can increase the retry timer directly in the app (minimum 20 seconds).
+- Click the server-status banner to open a live in-app diagnostics stream. It refreshes every second and shows the latest 250 local log lines.
 
 ## Download
 

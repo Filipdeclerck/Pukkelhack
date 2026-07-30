@@ -39,7 +39,7 @@ struct RequestResult {
     let errorDescription: String?
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate, UNUserNotificationCenterDelegate, NSWindowDelegate {
     private var interval: TimeInterval = 20
     private var timer: DispatchSourceTimer?
     private var isChecking = false
@@ -47,6 +47,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     private var rows: [Row] = []
     private var currentOfferURL: URL?
     private var activeOffers: [String: Row] = [:]
+    private var logWindow: NSWindow?
+    private var logTextView: NSTextView?
+    private var logRefreshTimer: Timer?
     private let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -127,6 +130,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         serverStatus.layer?.cornerRadius = 6
         serverStatus.drawsBackground = true
         setServerStatus("● Serverstatus: nog niet gecontroleerd", color: .secondaryLabelColor, background: .clear)
+        serverStatus.toolTip = "Klik om de live diagnostische log te bekijken"
+        serverStatus.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(showLogStream)))
 
         vipLimit.alignment = .right; vipLimit.maximumNumberOfLines = 1
         combiLimit.alignment = .right; combiLimit.maximumNumberOfLines = 1
@@ -261,6 +266,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
     @objc private func revealLogs() {
         try? FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
         NSWorkspace.shared.activateFileViewerSelecting([logDirectory])
+    }
+
+    @objc private func showLogStream() {
+        if let window = logWindow {
+            window.makeKeyAndOrderFront(nil)
+            refreshLogStream()
+            return
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 540), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.title = "Pukkelhack — live diagnostische log"
+        window.delegate = self
+        window.center()
+        let root = NSView()
+        window.contentView = root
+        let caption = NSTextField(wrappingLabelWithString: "Live logstream — HTTP-status, responstijd en cacheheaders. Vernieuwt elke seconde; er wordt geen ticketinhoud of persoonlijke data gelogd.")
+        caption.textColor = .secondaryLabelColor
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.backgroundColor = .textBackgroundColor
+        scroll.documentView = textView
+        caption.translatesAutoresizingMaskIntoConstraints = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(caption); root.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            caption.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            caption.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            caption.topAnchor.constraint(equalTo: root.topAnchor, constant: 16),
+            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            scroll.topAnchor.constraint(equalTo: caption.bottomAnchor, constant: 12),
+            scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16)
+        ])
+        logWindow = window
+        logTextView = textView
+        logRefreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refreshLogStream() }
+        refreshLogStream()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func refreshLogStream() {
+        guard let textView = logTextView else { return }
+        let files = (try? FileManager.default.contentsOfDirectory(at: logDirectory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let logFiles = files.filter { $0.pathExtension == "jsonl" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        guard let newest = logFiles.last, let text = try? String(contentsOf: newest, encoding: .utf8) else {
+            textView.string = "Nog geen logregels. De eerste controle verschijnt hier zodra die klaar is."
+            return
+        }
+        textView.string = text.split(separator: "\n").suffix(250).joined(separator: "\n")
+        textView.scrollToEndOfDocument(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard notification.object as? NSWindow === logWindow else { return }
+        logRefreshTimer?.invalidate(); logRefreshTimer = nil
+        logTextView = nil; logWindow = nil
     }
 
     @objc private func openFoundTicket() {
@@ -462,6 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         } catch {
             status.stringValue = "Diagnostische log kon niet worden geschreven"
         }
+        refreshLogStream()
     }
 
     private func freshURL(_ url: URL) -> URL {
