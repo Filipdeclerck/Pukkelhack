@@ -206,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
         let year = Calendar.current.component(.year, from: Date())
         let alert = NSAlert()
         alert.messageText = "Pukkelhack"
-        alert.informativeText = "Built with respect for the festival and love for the music by Fillter | Filip De Clerck\n\n© \(year) All rights reserved."
+        alert.informativeText = "Built with respect for the festival and love for the music by Fillter | Filip De Clerck\n\nPukkelhack is een onafhankelijk, niet-officieel hobbyproject en is op geen enkele manier verbonden met Pukkelpop of de festivalorganisatie. De app is er niet om het festival in de weg te zitten, maar om mensen met een drukke dag wat rust te geven door het handmatige checken te verminderen.\n\nPukkelhack biedt nooit garantie op een ticket. Hopelijk helpt de app je wel op het juiste moment kijken. Aan iedereen die dankzij deze tool een ticket kan bemachtigen: heel veel plezier en een fantastisch festival! 🎉\n\n© \(year) All rights reserved."
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }

@@ -27,4 +27,10 @@ The app is an AppKit application defined in `main.swift`. A universal build can 
 
 Built with respect for the festival and love for the music by Fillter | Filip De Clerck.
 
+## Friendly note
+
+Pukkelhack is an independent, unofficial hobby project and is not connected to Pukkelpop or the festival organisation in any way. It is not intended to get in the festival's way; it simply helps people with busy days spend less time manually checking the official Meet-up page.
+
+Pukkelhack never guarantees a ticket. We hope it helps you check at the right moment, though — and if it helps you secure one, have a wonderful and joyful festival! 🎉
+
 © 2026 All rights reserved.
